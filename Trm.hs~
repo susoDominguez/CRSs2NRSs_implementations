@@ -1,0 +1,257 @@
+-- Syntax of Nominal terms
+module Trm where
+
+-- import Control.Monad.Error
+
+import qualified Data.List as L
+import qualified Data.Map as M
+import qualified Data.Set as S
+
+-------------------------------------------------------------------------------
+-- DATA STRUCTURES to represent Nominal Syntax
+
+--Atom symbol as a String
+type Atm = String
+
+--Variable symbol as a String
+type Var = String
+
+--Function symbol as a String
+type Fun = String
+
+--Permutation is a list of swappings
+type Prm = [(Atm, Atm)]
+
+--Freshness context is a set of primitive constraints of form  a#X: (a,X)
+type Ctx = S.Set (Atm, Var)
+
+--explicit  substitution of atoms by terms
+type ASb = M.Map Atm Trm
+
+--Syntax of terms
+data Trm = AtmTrm Atm
+         | AbsTrm Atm Trm
+         | AppTrm Fun Trm
+         | TplTrm [Trm]
+         | VarTrm Prm Var 
+         | VarTrm' Prm Var ASb deriving (Show, Eq) --explicit subs applied to Vars
+
+--Term in context
+type TrmCtx = (Ctx, Trm)
+
+--Variable substitution
+type VSub = M.Map Var Trm
+
+--Error Term
+type TErr = String
+
+-----------------------Sets of Atms & Vars in a term ----
+
+--Set of atoms in a freshness context
+atmsCtx :: Ctx -> S.Set Atm
+atmsCtx = S.map fst
+
+varsCtx :: Ctx -> S.Set Var
+varsCtx = S.map snd
+
+
+atmsTrm :: Trm -> S.Set Atm
+atmsTrm (AtmTrm a)   = S.singleton a
+atmsTrm (AppTrm _ t) = atmsTrm t
+atmsTrm (TplTrm ts)  = S.unions (map atmsTrm ts)
+atmsTrm (AbsTrm a t) = S.insert a (atmsTrm t)
+atmsTrm (VarTrm p _) = prmSupp p --freshenin shouldnt be affected by (a a)
+
+varsTrm :: Trm -> S.Set Var
+varsTrm (AtmTrm _)   = S.empty
+varsTrm (AppTrm _ t) = varsTrm t
+varsTrm (TplTrm ts)  = S.unions (map varsTrm ts)
+varsTrm (AbsTrm _ t) = varsTrm t
+varsTrm (VarTrm _ v) = S.singleton v
+
+atmsTrmCtx :: TrmCtx -> S.Set Atm
+atmsTrmCtx (fc, t) = S.union (atmsCtx fc) (atmsTrm t)
+
+varsTrmCtx :: TrmCtx -> S.Set Var
+varsTrmCtx (fc, t) = S.union (varsCtx fc) (varsTrm t)
+
+-------------------------------------------------------------------------------
+-- PERMUTATIONS
+
+prmComp :: Prm -> Prm -> Prm
+prmComp = (++)
+
+prmInv :: Prm -> Prm
+prmInv = reverse
+
+atmsPrm :: Prm -> S.Set Atm
+atmsPrm = S.unions . (map (\(a, b) -> S.fromList [a, b]))
+
+prmSupp :: Prm -> S.Set Atm
+prmSupp p = S.filter (\a -> (prmAtmApp p a) /= a) (atmsPrm p)
+
+prmDs :: Prm -> Prm -> S.Set Atm
+prmDs p1 p2 = S.filter diff (S.union (atmsPrm p1) (atmsPrm p2))
+    where diff a = prmAtmApp p1 a /= prmAtmApp p2 a
+
+prmAtmApp :: Prm -> Atm -> Atm
+prmAtmApp [] a = a
+prmAtmApp ((a, b) : p) c
+    | c == a    = prmAtmApp p b
+    | c == b    = prmAtmApp p a
+    | otherwise = prmAtmApp p c
+
+prmTrmApp :: Prm -> Trm -> Trm
+prmTrmApp [] t = t
+prmTrmApp p (AtmTrm a)   = AtmTrm (prmAtmApp p a)
+prmTrmApp p (AbsTrm a t) = AbsTrm (prmAtmApp p a) (prmTrmApp p t)
+prmTrmApp p (AppTrm f t) = AppTrm f (prmTrmApp p t)
+prmTrmApp p (TplTrm ts)  = TplTrm (map (prmTrmApp p) ts)
+prmTrmApp p (VarTrm q v) = VarTrm (prmComp q p) v
+
+
+-------------------------------------------------------------------------
+--Context
+
+-- context fc2 satisfies fc1
+derives :: Ctx -> Ctx -> Bool
+derives fc1 fc2 = fc2 `S.isSubsetOf` fc1
+-----------------
+--groundTrm?
+isGround  = S.null . varsTrm 
+------------------------------------------------------------------------------
+-- Vsubstitutions
+
+vsubApp :: VSub -> Trm -> Trm
+vsubApp  sb t@(VarTrm p x) = case M.lookup x sb of
+                                     Nothing -> t
+                                     Just s  -> prmTrmApp p s
+vsubApp sb (AppTrm f ts) = AppTrm f (vsubApp sb ts)
+vsubApp sb (TplTrm ts) = TplTrm (map (vsubApp sb) ts)
+vsubApp sb (AbsTrm a t) = AbsTrm a (vsubApp sb t)
+vsubApp _ t = t
+
+
+vsubSearch :: Var -> VSub -> Maybe Trm
+vsubSearch = M.lookup
+
+-- idempotent substitution composition: see baader & snyder
+vsubComp :: VSub -> VSub -> VSub
+vsubComp sb1 sb2 = M.union ((step3 . step1) sb1) (step2 sb2)
+    where step1 = M.map (\t -> vsubApp sb2 t)
+          step2 = M.filterWithKey (\v _ -> M.notMember v sb1)
+          step3 = M.filterWithKey (\v t -> (VarTrm [] v) /= t)
+
+{-
+-- apply a variable substitution (sub) to a freshness context (cxt)
+vsubCtxApp :: VSub -> Cxt -> Maybe Cxt
+vsubCtxApp sub cxt = fmap S.unions (sequence (map fn (S.elems cxt)))
+    where fn cst @ (a, v) = case vsubApp v sub of
+                                 Just t -> fresh a t
+                                 Nothing -> Just (S.singleton cst)
+-}
+-------------------------------------------------------------------------------
+renameAtm :: (Atm, Atm) -> Atm -> Atm
+renameAtm (a, b) c = if c == a then b else c
+
+renameVar :: (Var, Var) -> Var -> Var
+renameVar (x, y) z = if z == x then y else z
+
+renameAtmPrm :: (Atm, Atm) -> Prm -> Prm
+renameAtmPrm as = map (\(a, b) -> (renameAtm as a, renameAtm as b))
+
+renameAtmCtx :: (Atm, Atm) -> Ctx -> Ctx
+renameAtmCtx as = S.map (\(a, v) -> (renameAtm as a, v))
+
+renameVarCtx :: (Var, Var) -> Ctx -> Ctx
+renameVarCtx vs = S.map (\(a, v) -> (a, renameVar vs v))
+
+renameAtmTrm :: (Atm, Atm) -> Trm -> Trm
+renameAtmTrm as (AtmTrm a)   = AtmTrm (renameAtm as a)
+renameAtmTrm as (AbsTrm a t) = AbsTrm (renameAtm as a) (renameAtmTrm as t)
+renameAtmTrm as (AppTrm f t) = AppTrm f (renameAtmTrm as t)
+renameAtmTrm as (TplTrm ts)  = TplTrm (map (renameAtmTrm as) ts)
+renameAtmTrm as (VarTrm p v) = VarTrm (renameAtmPrm as p) v
+
+renameUAtmTrm :: (Atm, Atm) -> Trm -> Trm
+renameUAtmTrm
+    = let f ab as (AbsTrm b t) = AbsTrm b (f (b : ab) as t)
+          f ab as @ (a, _) t = if a `elem` ab then t else renameAtmTrm as t
+      in f []
+
+renameVarTrm :: (Var, Var) -> Trm -> Trm
+renameVarTrm vs (AbsTrm a t) = AbsTrm a (renameVarTrm vs t)
+renameVarTrm vs (AppTrm f t) = AppTrm f (renameVarTrm vs t)
+renameVarTrm vs (VarTrm p v) = VarTrm p (renameVar vs v)
+renameVarTrm vs (TplTrm ts)  = TplTrm (map (renameVarTrm vs) ts)
+renameVarTrm _ t             = t
+
+renameAtmTrmCtx :: (Atm, Atm) -> TrmCtx -> TrmCtx
+renameAtmTrmCtx ns (fc, t) = (fc', t')
+    where fc' = renameAtmCtx ns fc
+          t' = renameAtmTrm ns t
+
+renameVarTrmCtx :: (Var, Var) -> TrmCtx -> TrmCtx
+renameVarTrmCtx ns (fc, t) = (fc', t')
+    where fc' = renameVarCtx ns fc
+          t' = renameVarTrm ns t
+
+-------------------------------------------------------------------------------
+{-RULES-}
+
+--data structure
+type Rule = (Ctx, Trm, Trm)
+
+--------------------------------------------
+
+-- PRETTY-PRINTING
+
+--permutations
+showPrm :: Prm -> String
+showPrm [] = ""
+showPrm ((a, b) : ts)| a==b = showPrm ts --discard Id swaps
+showPrm ((a, b) : ts) = showPrm ts ++ "(" ++ a ++ " " ++ b ++ ")"
+
+--freshness context
+showCtx :: Ctx -> String
+showCtx ctx = if S.null ctx
+                 then "{}" 
+                 else "{" ++ L.intercalate ", " (map (\(a,v) ->  a ++ "#" ++ v) (S.toList ctx)) ++ "}"
+
+--terms
+showTrm :: Trm -> String
+showTrm (AtmTrm a)    = a
+showTrm (AbsTrm a t)  = "[" ++ a ++ "]" ++ showTrm t
+showTrm (AppTrm n (TplTrm [])) = n
+showTrm (AppTrm n t)  = n ++ " " ++ showTrm t
+showTrm (TplTrm ts)   = "(" ++ L.intercalate ", " (map showTrm ts) ++ ")"
+showTrm (VarTrm [] v) = v
+showTrm (VarTrm p v)  = showPrm p ++ "+" ++ v
+--explicit substitution
+showTrm (VarTrm' p v ts) = showPrm p ++ 
+              (if null p then "" else "+") ++ v  ++ showASb ts 
+
+showASb :: M.Map Atm Trm -> String
+showASb m 
+   | M.null m = ""
+   | otherwise = concat $ map (\(k,a) -> "[" ++ k ++ " -> " ++ showTrm a ++ "]"  ) (M.assocs m)
+--endOf
+
+
+showTrmCtx :: TrmCtx -> String
+showTrmCtx (fc, t) = showCtx fc ++ " |-  " ++ showTrm t
+
+showVSub :: VSub -> String
+showVSub sb = M.foldrWithKey (\v t acc -> acc ++ (fn v t)) "" sb
+    where fn v t = "[" ++ v ++ " -> " ++ showTrm t ++ "]"
+
+
+showRule :: Rule -> String
+showRule (fc,l,r) = showCtx fc ++ " |- " ++ showTrm l ++ " --> " ++ showTrm r
+
+
+showSteps :: Ctx -> [Trm] -> String
+showSteps fc ts = showCtx fc ++ " |- " ++ L.intercalate "-->" (map showTrm ts) ++ "." 
+
+
+
