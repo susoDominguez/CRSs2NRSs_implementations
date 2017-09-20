@@ -1,9 +1,13 @@
 -- Syntax of Nominal terms and operations on them
 module Trm where
 
+----------------------Preamble
+--containers
 import qualified Data.List as L
 import qualified Data.Map as M
+import Data.Map(Map)
 import qualified Data.Set as S
+import Data.Set(Set)
 
 --------------------------  DATA STRUCTURES
 
@@ -54,12 +58,12 @@ prmInv :: Prm -> Prm
 prmInv = reverse
 
 --returns all the names in a given permutation
-atmsPrm :: Prm -> S.Set Atm
+atmsPrm :: Prm -> Set Atm
 atmsPrm = S.unions . (map (\(a, b) -> S.fromList [a, b]))
 
 {-| Returns the support of a permutation p. Observe that if p = (a b)(c d)(b a),
   then atoms a,b are not in the support of p since p(a)=a and p(b)=b. -}
-prmSupp :: Prm -> S.Set Atm
+prmSupp :: Prm -> Set Atm
 prmSupp p = S.filter (\a -> (prmAtmApp p a) /= a) (atmsPrm p)
 
 --Application of a permutation to an atom symbol
@@ -83,7 +87,7 @@ prmTrmApp p (VarTrm q v) = VarTrm (prmComp q p) v
 {-| Returns the Difference Set between a pair of permutations, that is,
   for permutations p,p' and atom a, if p(a)=b and p'(a)=c, for any two distinct
   atoms b,c, then atom a is in their Difference set.-}
-prmDs :: Prm -> Prm -> S.Set Atm
+prmDs :: Prm -> Prm -> Set Atm
 prmDs p1 p2 = S.filter diff $ S.union (atmsPrm p1) (atmsPrm p2)
     where diff a = prmAtmApp p1 a /= prmAtmApp p2 a
 
@@ -93,16 +97,16 @@ prmDs p1 p2 = S.filter diff $ S.union (atmsPrm p1) (atmsPrm p2)
 
 {-| Set of atom symbols in a freshness context \Delta, that is,
   {a | a#X\in\Delta}. -}
-atmsCtx :: Ctx -> S.Set Atm
+atmsCtx :: Ctx -> Set Atm
 atmsCtx = S.map fst
 
 {-| Set of variable symbols in a freshness context \Delta, that is,
   {X | a#X\in\Delta}. -}
-varsCtx :: Ctx -> S.Set Var
+varsCtx :: Ctx -> Set Var
 varsCtx = S.map snd
 
 {-| Returns the set of atom symbols from a given Nominal term. -}
-atmsTrm :: Trm -> S.Set Atm
+atmsTrm :: Trm -> Set Atm
 atmsTrm (AtmTrm a)   = S.singleton a
 atmsTrm (AppTrm _ t) = atmsTrm t
 atmsTrm (TplTrm ts)  = S.unions (map atmsTrm ts)
@@ -110,7 +114,7 @@ atmsTrm (AbsTrm a t) = S.insert a (atmsTrm t)
 atmsTrm (VarTrm p _) = prmSupp p --support of a permutation p
 
 {-| Returns the set of variable symbols from a given Nominal term. -}
-varsTrm :: Trm -> S.Set Var
+varsTrm :: Trm -> Set Var
 varsTrm (AtmTrm _)   = S.empty
 varsTrm (AppTrm _ t) = varsTrm t
 varsTrm (TplTrm ts)  = S.unions (map varsTrm ts)
@@ -118,21 +122,23 @@ varsTrm (AbsTrm _ t) = varsTrm t
 varsTrm (VarTrm _ v) = S.singleton v
 
 {-| Returns the set of atom symbols from a given Nominal term-in-Context. -}
-atmsTrmCtx :: TrmCtx -> S.Set Atm
+atmsTrmCtx :: TrmCtx -> Set Atm
 atmsTrmCtx (fc, t) = S.union (atmsCtx fc) (atmsTrm t)
 
 {-| Returns the set of variable  symbols from a given Nominal term-in-Context. -}
-varsTrmCtx :: TrmCtx -> S.Set Var
+varsTrmCtx :: TrmCtx -> Set Var
 varsTrmCtx (fc, t) = S.union (varsCtx fc) (varsTrm t)
 
-
+{-| Returns true when applied to a Nominal term containing
+  no moderated variables. -}
+isGround  = S.null . varsTrm 
 
 -------------------------- PRETTY-PRINTING of Nominal terms
 
 --printing permutations
 showPrm :: Prm -> String
 showPrm [] = ""
-showPrm ((a, b) : ts)| a==b = showPrm ts --discard Id swaps
+showPrm ((a, b) : ts)| a==b = showPrm ts --discards Identity swaps
 showPrm ((a, b) : ts) = showPrm ts ++ "(" ++ a ++ " " ++ b ++ ")"
 
 --printing a freshness context
@@ -155,11 +161,11 @@ showTrm (VarTrm p v)  = showPrm p ++ "+" ++ v
 showTrm (VarTrm' p v ts) = showPrm p ++ 
               (if null p then "" else "+") ++ v  ++ showASb ts 
 
-showASb :: M.Map Atm Trm -> String
+showASb :: Map Atm Trm -> String
 showASb m 
    | M.null m = ""
    | otherwise = concat $ map (\(k,a) -> "[" ++ k ++ " -> " ++ showTrm a ++ "]"  ) (M.assocs m)
---endOf explicit substittuion printing
+--endOf explicit substituion printing
 
 --prints a term-in-context
 showTrmCtx :: TrmCtx -> String
@@ -177,18 +183,20 @@ showRule (fc,l,r) = showCtx fc ++ " |- " ++ showTrm l ++ " --> " ++ showTrm r
 --prints a sequence of nominal rewrite steps
 showSteps :: Ctx -> [Trm] -> String
 showSteps fc ts = showCtx fc ++ " |- " ++ L.intercalate "-->" (map showTrm ts) ++ "."
--------------------------------------------------------------------------
---Context
 
--- context fc2 satisfies fc1
+
+----------------------------------Freshness Context
+
+{-| Function (derives fc1 fc2) returns  True when
+  freshness context fc2 is derivable from freshness context fc1.-}
 derives :: Ctx -> Ctx -> Bool
 derives fc1 fc2 = fc2 `S.isSubsetOf` fc1
------------------
---groundTrm?
-isGround  = S.null . varsTrm 
-------------------------------------------------------------------------------
--- Vsubstitutions
 
+
+--------------------- Variable substitutions
+
+{-| Returns a Nominal term where some (possibly none) variable instantiations
+  have been applied.-}
 vsubApp :: VSub -> Trm -> Trm
 vsubApp  sb t@(VarTrm p x) = case M.lookup x sb of
                                      Nothing -> t
@@ -198,25 +206,25 @@ vsubApp sb (TplTrm ts) = TplTrm (map (vsubApp sb) ts)
 vsubApp sb (AbsTrm a t) = AbsTrm a (vsubApp sb t)
 vsubApp _ t = t
 
-
+{-| Applied to a variable symbol and a set of variable mappings, it returns the image
+  term t of the given variable as Just t or, otherwise, Nothing. -}
 vsubSearch :: Var -> VSub -> Maybe Trm
 vsubSearch = M.lookup
 
--- idempotent substitution composition: see baader & snyder
+{-| idempotent substitution composition: see baader & snyder -} 
 vsubComp :: VSub -> VSub -> VSub
 vsubComp sb1 sb2 = M.union ((step3 . step1) sb1) (step2 sb2)
     where step1 = M.map (\t -> vsubApp sb2 t)
           step2 = M.filterWithKey (\v _ -> M.notMember v sb1)
           step3 = M.filterWithKey (\v t -> (VarTrm [] v) /= t)
 
-{-
--- apply a variable substitution (sub) to a freshness context (cxt)
-vsubCtxApp :: VSub -> Cxt -> Maybe Cxt
-vsubCtxApp sub cxt = fmap S.unions (sequence (map fn (S.elems cxt)))
-    where fn cst @ (a, v) = case vsubApp v sub of
-                                 Just t -> fresh a t
-                                 Nothing -> Just (S.singleton cst)
--}
+{-| the vsubCtxApp function returns a freshness context where some variable
+  instantiations (possibly none) have been applied. -}
+vsubCtxApp :: VSub -> Ctx -> Maybe Ctx
+vsubCtxApp sub cxt = fmap S.unions $ sequence (map fn (S.elems cxt))
+           where fn cst @ (a, v) = case vsubApp v sub of
+                                     Just t -> fresh a t
+                                     Nothing -> Just (S.singleton cst)
 -------------------------------------------------------------------------------
 renameAtm :: (Atm, Atm) -> Atm -> Atm
 renameAtm (a, b) c = if c == a then b else c
